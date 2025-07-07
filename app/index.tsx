@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, Alert, StatusBar } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
@@ -14,6 +14,8 @@ import EdgeControls from '../components/EdgeControls';
 import EnhancementControls from '../components/EnhancementControls';
 import ActionButtons from '../components/ActionButtons';
 import BottomSheet from '../components/BottomSheet';
+import * as tf from '@tensorflow/tfjs';
+import * as depthEstimation from '@tensorflow-models/depth-estimation';
 
 export default function App() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -30,12 +32,23 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [showBottomSheet, setShowBottomSheet] = useState(false);
   const [bottomSheetContent, setBottomSheetContent] = useState<string>('');
+  const depthEstimatorRef = useRef<depthEstimation.DepthEstimator | null>(null);
 
   useEffect(() => {
     if (depthMap && gradientColors) {
       applyColorsToDepthMap();
     }
   }, [gradientColors, enhancementSettings, edgeSettings]);
+
+  const loadDepthEstimator = async () => {
+    if (!depthEstimatorRef.current) {
+      await tf.ready();
+      depthEstimatorRef.current = await depthEstimation.createEstimator(
+        depthEstimation.SupportedModels.ARPortraitDepth
+      );
+    }
+    return depthEstimatorRef.current;
+  };
 
   const handleImageSelect = (imageUri: string) => {
     setSelectedImage(imageUri);
@@ -58,57 +71,68 @@ export default function App() {
 
     setIsGenerating(true);
     try {
-      const response = await fetch(selectedImage);
-      const blob = await response.blob();
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      const img = new Image();
-      
-      await new Promise<void>((resolve) => {
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx?.drawImage(img, 0, 0);
-          
-          const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
-          if (imageData) {
-            const data = imageData.data;
-            
-            for (let i = 0; i < data.length; i += 4) {
-              let gray;
-              switch (selectedMethod) {
-                case 'depth-anything-v2':
-                  gray = (data[i] * 0.2 + data[i + 1] * 0.7 + data[i + 2] * 0.1) * (methodParams.confidence || 0.5);
-                  break;
-                case 'midas':
-                  gray = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) * (methodParams.alpha || 0.6);
-                  break;
-                case 'marigold':
-                  gray = Math.pow(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114, 1.2) * (methodParams.ensemble || 4) / 4;
-                  break;
-                case 'tfjs-depth':
-                  gray = (data[i] * 0.1 + data[i + 1] * 0.8 + data[i + 2] * 0.1) * (methodParams.focus || 0.8);
-                  break;
-                case 'depth-pro':
-                  gray = Math.min(255, (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) * (methodParams.sharpness || 1.0));
-                  break;
-                default:
-                  gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+      if (selectedMethod === 'tfjs-depth' || selectedMethod === 'midas') {
+        const estimator = await loadDepthEstimator();
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error('Image load failed'));
+          img.src = selectedImage;
+        });
+        const depthResult = await estimator.estimateDepth(img, { minDepth: 0, maxDepth: 1 });
+        const src = await depthResult.toCanvasImageSource();
+        let outCanvas: HTMLCanvasElement;
+        if (src instanceof HTMLCanvasElement) {
+          outCanvas = src;
+        } else {
+          outCanvas = document.createElement('canvas');
+          outCanvas.width = (src as HTMLImageElement).width;
+          outCanvas.height = (src as HTMLImageElement).height;
+          outCanvas.getContext('2d')?.drawImage(src, 0, 0);
+        }
+        setDepthMap(outCanvas.toDataURL());
+      } else {
+        const response = await fetch(selectedImage);
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+        await new Promise<void>((resolve) => {
+          img.onload = () => {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx?.drawImage(img, 0, 0);
+            const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
+            if (imageData) {
+              const data = imageData.data;
+              for (let i = 0; i < data.length; i += 4) {
+                let gray;
+                switch (selectedMethod) {
+                  case 'depth-anything-v2':
+                    gray = (data[i] * 0.2 + data[i + 1] * 0.7 + data[i + 2] * 0.1) * (methodParams.confidence || 0.5);
+                    break;
+                  case 'marigold':
+                    gray = Math.pow(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114, 1.2) * (methodParams.ensemble || 4) / 4;
+                    break;
+                  case 'depth-pro':
+                    gray = Math.min(255, (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) * (methodParams.sharpness || 1.0));
+                    break;
+                  default:
+                    gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+                }
+                gray = Math.max(0, Math.min(255, gray));
+                data[i] = gray;
+                data[i + 1] = gray;
+                data[i + 2] = gray;
               }
-              
-              gray = Math.max(0, Math.min(255, gray));
-              data[i] = gray;
-              data[i + 1] = gray;
-              data[i + 2] = gray;
+              ctx?.putImageData(imageData, 0, 0);
             }
-            ctx?.putImageData(imageData, 0, 0);
-          }
-          
-          setDepthMap(canvas.toDataURL());
-          resolve();
-        };
-        img.src = selectedImage;
-      });
+            setDepthMap(canvas.toDataURL());
+            resolve();
+          };
+          img.src = selectedImage;
+        });
+      }
       
       Alert.alert('Success', 'Depth map generated!');
     } catch (error) {
