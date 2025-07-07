@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, Alert, StatusBar } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
@@ -14,6 +14,7 @@ import EdgeControls from '../components/EdgeControls';
 import EnhancementControls from '../components/EnhancementControls';
 import ActionButtons from '../components/ActionButtons';
 import BottomSheet from '../components/BottomSheet';
+import Canvas, { Image as CanvasImage } from 'react-native-canvas';
 
 export default function App() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -30,6 +31,7 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [showBottomSheet, setShowBottomSheet] = useState(false);
   const [bottomSheetContent, setBottomSheetContent] = useState<string>('');
+  const canvasRef = useRef<Canvas | null>(null);
 
   useEffect(() => {
     if (depthMap && gradientColors) {
@@ -58,19 +60,18 @@ export default function App() {
 
     setIsGenerating(true);
     try {
-      const response = await fetch(selectedImage);
-      const blob = await response.blob();
-      const canvas = document.createElement('canvas');
+      const canvas = canvasRef.current;
+      if (!canvas) throw new Error('Canvas not ready');
       const ctx = canvas.getContext('2d');
-      const img = new Image();
-      
+      const img = new CanvasImage(canvas);
+
       await new Promise<void>((resolve) => {
-        img.onload = () => {
+        img.addEventListener('load', () => {
           canvas.width = img.width;
           canvas.height = img.height;
-          ctx?.drawImage(img, 0, 0);
-          
-          const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           if (imageData) {
             const data = imageData.data;
             
@@ -104,8 +105,10 @@ export default function App() {
             ctx?.putImageData(imageData, 0, 0);
           }
           
-          setDepthMap(canvas.toDataURL());
-          resolve();
+          canvas.toDataURL('image/png').then((url) => {
+            setDepthMap(url);
+            resolve();
+          });
         };
         img.src = selectedImage;
       });
@@ -122,16 +125,17 @@ export default function App() {
     if (!depthMap) return;
 
     try {
-      const canvas = document.createElement('canvas');
+      const canvas = canvasRef.current;
+      if (!canvas) return;
       const ctx = canvas.getContext('2d');
-      const img = new Image();
-      
-      img.onload = () => {
+      const img = new CanvasImage(canvas);
+
+      img.addEventListener('load', () => {
         canvas.width = img.width;
         canvas.height = img.height;
-        ctx?.drawImage(img, 0, 0);
-        
-        const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         if (imageData) {
           const data = imageData.data;
           const fgColor = hexToRgb(gradientColors.foreground);
@@ -152,11 +156,10 @@ export default function App() {
             data[i + 1] = g;
             data[i + 2] = b;
           }
-          ctx?.putImageData(imageData, 0, 0);
+          ctx.putImageData(imageData, 0, 0);
         }
-        
-        setColoredImage(canvas.toDataURL());
-      };
+        canvas.toDataURL('image/png').then(setColoredImage);
+      });
       img.src = depthMap;
     } catch (error) {
       console.error('Failed to apply colors:', error);
@@ -282,6 +285,10 @@ export default function App() {
       >
         {renderBottomSheetContent()}
       </BottomSheet>
+      <Canvas
+        ref={canvasRef}
+        style={{ position: 'absolute', width: 1, height: 1, top: -100 }}
+      />
     </View>
   );
 }
