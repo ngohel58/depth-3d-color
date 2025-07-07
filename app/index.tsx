@@ -14,6 +14,7 @@ import EdgeControls from '../components/EdgeControls';
 import EnhancementControls from '../components/EnhancementControls';
 import ActionButtons from '../components/ActionButtons';
 import BottomSheet from '../components/BottomSheet';
+import Canvas, { Image as CanvasImage } from 'react-native-canvas';
 
 export default function App() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -30,6 +31,7 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [showBottomSheet, setShowBottomSheet] = useState(false);
   const [bottomSheetContent, setBottomSheetContent] = useState<string>('');
+  const canvasRef = React.useRef<Canvas | null>(null);
 
   useEffect(() => {
     if (depthMap && gradientColors) {
@@ -51,65 +53,69 @@ export default function App() {
   };
 
   const generateDepthMap = async () => {
-    if (!selectedImage || !selectedMethod) {
+    if (!selectedImage || !selectedMethod || !canvasRef.current) {
       Alert.alert('Error', 'Please select an image and depth method first');
       return;
     }
 
     setIsGenerating(true);
     try {
-      const response = await fetch(selectedImage);
-      const blob = await response.blob();
-      const canvas = document.createElement('canvas');
+      const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
-      const img = new Image();
-      
-      await new Promise<void>((resolve) => {
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx?.drawImage(img, 0, 0);
-          
-          const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
-          if (imageData) {
-            const data = imageData.data;
-            
-            for (let i = 0; i < data.length; i += 4) {
-              let gray;
-              switch (selectedMethod) {
-                case 'depth-anything-v2':
-                  gray = (data[i] * 0.2 + data[i + 1] * 0.7 + data[i + 2] * 0.1) * (methodParams.confidence || 0.5);
-                  break;
-                case 'midas':
-                  gray = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) * (methodParams.alpha || 0.6);
-                  break;
-                case 'marigold':
-                  gray = Math.pow(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114, 1.2) * (methodParams.ensemble || 4) / 4;
-                  break;
-                case 'tfjs-depth':
-                  gray = (data[i] * 0.1 + data[i + 1] * 0.8 + data[i + 2] * 0.1) * (methodParams.focus || 0.8);
-                  break;
-                case 'depth-pro':
-                  gray = Math.min(255, (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) * (methodParams.sharpness || 1.0));
-                  break;
-                default:
-                  gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-              }
-              
-              gray = Math.max(0, Math.min(255, gray));
-              data[i] = gray;
-              data[i + 1] = gray;
-              data[i + 2] = gray;
-            }
-            ctx?.putImageData(imageData, 0, 0);
-          }
-          
-          setDepthMap(canvas.toDataURL());
-          resolve();
-        };
-        img.src = selectedImage;
+      const img = new CanvasImage(canvas);
+
+      let src = selectedImage;
+      if (!selectedImage.startsWith('data:')) {
+        const base64 = await FileSystem.readAsStringAsync(selectedImage, { encoding: FileSystem.EncodingType.Base64 });
+        src = `data:image/png;base64,${base64}`;
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        img.addEventListener('load', resolve);
+        img.addEventListener('error', () => reject(new Error('load fail')));
+        img.src = src;
       });
-      
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+      await ctx.drawImage(img, 0, 0);
+
+      const imageData = await ctx.getImageData(0, 0, canvas.width, canvas.height);
+      if (imageData) {
+        const data = imageData.data;
+
+        for (let i = 0; i < data.length; i += 4) {
+          let gray: number;
+          switch (selectedMethod) {
+            case 'depth-anything-v2':
+              gray = (data[i] * 0.2 + data[i + 1] * 0.7 + data[i + 2] * 0.1) * (methodParams.confidence || 0.5);
+              break;
+            case 'midas':
+              gray = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) * (methodParams.alpha || 0.6);
+              break;
+            case 'marigold':
+              gray = Math.pow(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114, 1.2) * (methodParams.ensemble || 4) / 4;
+              break;
+            case 'tfjs-depth':
+              gray = (data[i] * 0.1 + data[i + 1] * 0.8 + data[i + 2] * 0.1) * (methodParams.focus || 0.8);
+              break;
+            case 'depth-pro':
+              gray = Math.min(255, (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) * (methodParams.sharpness || 1.0));
+              break;
+            default:
+              gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+          }
+
+          gray = Math.max(0, Math.min(255, gray));
+          data[i] = gray;
+          data[i + 1] = gray;
+          data[i + 2] = gray;
+        }
+        await ctx.putImageData(imageData, 0, 0);
+      }
+
+      const result = await canvas.toDataURL();
+      setDepthMap(result);
       Alert.alert('Success', 'Depth map generated!');
     } catch (error) {
       Alert.alert('Error', 'Failed to generate depth map');
@@ -119,45 +125,49 @@ export default function App() {
   };
 
   const applyColorsToDepthMap = async () => {
-    if (!depthMap) return;
+    if (!depthMap || !canvasRef.current) return;
 
     try {
-      const canvas = document.createElement('canvas');
+      const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
-      const img = new Image();
-      
-      img.onload = () => {
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx?.drawImage(img, 0, 0);
-        
-        const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
-        if (imageData) {
-          const data = imageData.data;
-          const fgColor = hexToRgb(gradientColors.foreground);
-          const bgColor = hexToRgb(gradientColors.background);
-          
-          for (let i = 0; i < data.length; i += 4) {
-            const intensity = data[i] / 255;
-            
-            let r = bgColor.r + (fgColor.r - bgColor.r) * intensity;
-            let g = bgColor.g + (fgColor.g - bgColor.g) * intensity;
-            let b = bgColor.b + (fgColor.b - bgColor.b) * intensity;
-            
-            r = Math.max(0, Math.min(255, r * enhancementSettings.contrast + enhancementSettings.brightness));
-            g = Math.max(0, Math.min(255, g * enhancementSettings.contrast + enhancementSettings.brightness));
-            b = Math.max(0, Math.min(255, b * enhancementSettings.contrast + enhancementSettings.brightness));
-            
-            data[i] = r;
-            data[i + 1] = g;
-            data[i + 2] = b;
-          }
-          ctx?.putImageData(imageData, 0, 0);
+      const img = new CanvasImage(canvas);
+
+      await new Promise<void>((resolve, reject) => {
+        img.addEventListener('load', resolve);
+        img.addEventListener('error', reject);
+        img.src = depthMap;
+      });
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+      await ctx.drawImage(img, 0, 0);
+
+      const imageData = await ctx.getImageData(0, 0, canvas.width, canvas.height);
+      if (imageData) {
+        const data = imageData.data;
+        const fgColor = hexToRgb(gradientColors.foreground);
+        const bgColor = hexToRgb(gradientColors.background);
+
+        for (let i = 0; i < data.length; i += 4) {
+          const intensity = data[i] / 255;
+
+          let r = bgColor.r + (fgColor.r - bgColor.r) * intensity;
+          let g = bgColor.g + (fgColor.g - bgColor.g) * intensity;
+          let b = bgColor.b + (fgColor.b - bgColor.b) * intensity;
+
+          r = Math.max(0, Math.min(255, r * enhancementSettings.contrast + enhancementSettings.brightness));
+          g = Math.max(0, Math.min(255, g * enhancementSettings.contrast + enhancementSettings.brightness));
+          b = Math.max(0, Math.min(255, b * enhancementSettings.contrast + enhancementSettings.brightness));
+
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
         }
-        
-        setColoredImage(canvas.toDataURL());
-      };
-      img.src = depthMap;
+        await ctx.putImageData(imageData, 0, 0);
+      }
+
+      const result = await canvas.toDataURL();
+      setColoredImage(result);
     } catch (error) {
       console.error('Failed to apply colors:', error);
     }
@@ -282,6 +292,7 @@ export default function App() {
       >
         {renderBottomSheetContent()}
       </BottomSheet>
+      <Canvas ref={canvasRef} style={{ width: 1, height: 1, position: 'absolute', opacity: 0 }} />
     </View>
   );
 }
