@@ -11,6 +11,7 @@ import MethodControls from '../components/MethodControls';
 import PreviewPanel from '../components/PreviewPanel';
 import GradientControls from '../components/GradientControls';
 import EdgeControls from '../components/EdgeControls';
+import { hexToRgb } from '../utils/colorUtils';
 import EnhancementControls from '../components/EnhancementControls';
 import ActionButtons from '../components/ActionButtons';
 import BottomSheet from '../components/BottomSheet';
@@ -163,14 +164,6 @@ export default function App() {
     }
   };
 
-  const hexToRgb = (hex: string) => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result ? {
-      r: parseInt(result[1], 16),
-      g: parseInt(result[2], 16),
-      b: parseInt(result[3], 16)
-    } : { r: 0, g: 0, b: 0 };
-  };
 
   const handleDownload = async (type: 'depth' | 'final') => {
     const imageToDownload = type === 'depth' ? depthMap : coloredImage;
