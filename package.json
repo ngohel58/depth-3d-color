@@ -9,7 +9,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "build": "npx expo export --platform web"
+    "build": "npx expo export --platform web",
+    "test": "jest"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
@@ -52,7 +53,10 @@
     "typescript": "~5.8.3",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~9.2.0",
-    "@types/react-native": "~0.73.0"
+    "@types/react-native": "~0.73.0",
+    "@types/jest": "^30.0.0",
+    "jest": "^30.0.4",
+    "ts-jest": "^29.4.0"
   },
   "overrides": {
     "ajv": "8.12.0"

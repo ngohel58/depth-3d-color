@@ -1,0 +1,10 @@
+node_modules/
+build/
+dist/
+coverage/
+.expo/
+
+# Expo specific local files
+.expo/*
+.expo-shared/*
+
