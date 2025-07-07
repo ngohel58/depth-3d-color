@@ -125,21 +125,25 @@ export default function App() {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       const img = new Image();
-      
+
       img.onload = () => {
         canvas.width = img.width;
         canvas.height = img.height;
         ctx?.drawImage(img, 0, 0);
-        
+
         const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
         if (imageData) {
           const data = imageData.data;
           const fgColor = hexToRgb(gradientColors.foreground);
           const bgColor = hexToRgb(gradientColors.background);
-          
+          const originalGray = new Uint8ClampedArray(data.length);
+          for (let i = 0; i < data.length; i += 4) {
+            originalGray[i] = data[i]; // depth map is grayscale so r == g == b
+          }
+
           for (let i = 0; i < data.length; i += 4) {
             const intensity = data[i] / 255;
-            
+
             let r = bgColor.r + (fgColor.r - bgColor.r) * intensity;
             let g = bgColor.g + (fgColor.g - bgColor.g) * intensity;
             let b = bgColor.b + (fgColor.b - bgColor.b) * intensity;
@@ -152,9 +156,40 @@ export default function App() {
             data[i + 1] = g;
             data[i + 2] = b;
           }
+
+          if (edgeSettings.enabled) {
+            const edgeColor = hexToRgb(edgeSettings.color);
+            const threshold = 30;
+            const w = canvas.width;
+            const h = canvas.height;
+            const thickness = Math.max(1, edgeSettings.thickness);
+
+            for (let y = 0; y < h; y++) {
+              for (let x = 0; x < w; x++) {
+                const idx = (y * w + x) * 4;
+                const intensity = originalGray[idx];
+                const right = x < w - 1 ? originalGray[idx + 4] : intensity;
+                const bottom = y < h - 1 ? originalGray[idx + w * 4] : intensity;
+                const diff = Math.abs(intensity - right) + Math.abs(intensity - bottom);
+
+                if (diff > threshold) {
+                  for (let dy = 0; dy < thickness; dy++) {
+                    for (let dx = 0; dx < thickness; dx++) {
+                      const eIdx = ((y + dy) * w + (x + dx)) * 4;
+                      if (eIdx < data.length) {
+                        data[eIdx] = edgeColor.r;
+                        data[eIdx + 1] = edgeColor.g;
+                        data[eIdx + 2] = edgeColor.b;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
           ctx?.putImageData(imageData, 0, 0);
         }
-        
+
         setColoredImage(canvas.toDataURL());
       };
       img.src = depthMap;
@@ -271,7 +306,8 @@ export default function App() {
         onClose={() => setShowBottomSheet(false)}
         onApply={() => {
           if (selectedTool === 'depth') generateDepthMap();
-          else if (selectedTool === 'gradient') applyColorsToDepthMap();
+          else if (selectedTool === 'gradient' || selectedTool === 'edge')
+            applyColorsToDepthMap();
           setShowBottomSheet(false);
         }}
         onRevert={() => {
