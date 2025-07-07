@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Depth Vision Web</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; background:#f4f4f4; }
+  h1 { color:#333; }
+  #preview { display:flex; gap:20px; margin-top:20px; }
+  canvas, img { max-width:300px; border:1px solid #ccc; }
+  .controls { margin-top:20px; }
+  label { display:block; margin-top:10px; }
+</style>
+</head>
+<body>
+<h1>Depth Vision Web Demo</h1>
+<input type="file" id="imageInput" accept="image/*" />
+<label>Depth Method:
+<select id="method">
+  <option value="depth-anything-v2">Depth Anything v2</option>
+  <option value="midas">MiDaS</option>
+  <option value="marigold">Marigold</option>
+  <option value="tfjs-depth">TFJS Depth</option>
+  <option value="depth-pro">Depth Pro</option>
+</select>
+</label>
+<div class="controls">
+  <button id="genDepth">Generate Depth Map</button>
+  <label>Foreground Color <input type="color" id="fg" value="#ff0000"></label>
+  <label>Background Color <input type="color" id="bg" value="#0000ff"></label>
+  <button id="applyColors">Apply Gradient</button>
+</div>
+<div id="preview">
+  <img id="original" alt="Original" />
+  <canvas id="depth"></canvas>
+  <canvas id="colored"></canvas>
+</div>
+<div class="controls">
+  <button id="dlDepth">Download Depth</button>
+  <button id="dlFinal">Download Final</button>
+</div>
+<script>
+let imageDataUrl = null;
+const imageInput = document.getElementById('imageInput');
+imageInput.addEventListener('change', evt => {
+  const file = evt.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    imageDataUrl = e.target.result;
+    document.getElementById('original').src = imageDataUrl;
+  };
+  reader.readAsDataURL(file);
+});
+
+function drawImageToCanvas(img, canvas){
+  const ctx = canvas.getContext('2d');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  ctx.drawImage(img, 0, 0);
+  return ctx.getImageData(0,0,canvas.width,canvas.height);
+}
+
+function generateDepth(){
+  if(!imageDataUrl) return alert('Upload an image first');
+  const method = document.getElementById('method').value;
+  const img = new Image();
+  img.onload = ()=>{
+    const depthCanvas = document.getElementById('depth');
+    const ctx = depthCanvas.getContext('2d');
+    const imageData = drawImageToCanvas(img, depthCanvas);
+    const data = imageData.data;
+    for(let i=0;i<data.length;i+=4){
+      let gray;
+      switch(method){
+        case 'depth-anything-v2':
+          gray = (data[i]*0.2 + data[i+1]*0.7 + data[i+2]*0.1)*0.5;
+          break;
+        case 'midas':
+          gray = (data[i]*0.299 + data[i+1]*0.587 + data[i+2]*0.114)*0.6;
+          break;
+        case 'marigold':
+          gray = Math.pow(data[i]*0.299 + data[i+1]*0.587 + data[i+2]*0.114,1.2);
+          break;
+        case 'tfjs-depth':
+          gray = (data[i]*0.1 + data[i+1]*0.8 + data[i+2]*0.1)*0.8;
+          break;
+        case 'depth-pro':
+          gray = Math.min(255,(data[i]*0.299 + data[i+1]*0.587 + data[i+2]*0.114));
+          break;
+        default:
+          gray = data[i]*0.299 + data[i+1]*0.587 + data[i+2]*0.114;
+      }
+      gray = Math.max(0, Math.min(255, gray));
+      data[i]=data[i+1]=data[i+2]=gray;
+    }
+    ctx.putImageData(imageData,0,0);
+  };
+  img.src = imageDataUrl;
+}
+
+function hexToRgb(h){
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h);
+  return m ? {r:parseInt(m[1],16),g:parseInt(m[2],16),b:parseInt(m[3],16)} : {r:0,g:0,b:0};
+}
+function applyColors(){
+  const depthCanvas = document.getElementById('depth');
+  if(!depthCanvas.width) return alert('Generate depth map first');
+  const fg = hexToRgb(document.getElementById('fg').value);
+  const bg = hexToRgb(document.getElementById('bg').value);
+  const imgData = depthCanvas.getContext('2d').getImageData(0,0,depthCanvas.width,depthCanvas.height);
+  const data = imgData.data;
+  for(let i=0;i<data.length;i+=4){
+    const intensity = data[i]/255;
+    let r = bg.r + (fg.r - bg.r)*intensity;
+    let g = bg.g + (fg.g - bg.g)*intensity;
+    let b = bg.b + (fg.b - bg.b)*intensity;
+    data[i]=r; data[i+1]=g; data[i+2]=b;
+  }
+  const colorCanvas = document.getElementById('colored');
+  colorCanvas.width = depthCanvas.width;
+  colorCanvas.height = depthCanvas.height;
+  colorCanvas.getContext('2d').putImageData(imgData,0,0);
+}
+
+function downloadCanvas(id){
+  const canvas = document.getElementById(id);
+  if(!canvas.width) return alert('Nothing to download');
+  const link = document.createElement('a');
+  link.href = canvas.toDataURL('image/png');
+  link.download = id + '.png';
+  link.click();
+}
+
+document.getElementById('genDepth').onclick = generateDepth;
+document.getElementById('applyColors').onclick = applyColors;
+document.getElementById('dlDepth').onclick = ()=>downloadCanvas('depth');
+document.getElementById('dlFinal').onclick = ()=>downloadCanvas('colored');
+</script>
+</body>
+</html>
